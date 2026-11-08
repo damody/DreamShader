@@ -1893,6 +1893,30 @@ namespace UE::DreamShader::Lang::Private
 			Conversion = Site == EConversionSite::Pin ? IR::EIRConversion::Identity : IR::EIRConversion::Truncate;
 		}
 
+		// EndlessAlice local hunk: the engine's graph connects a wider vector to a narrower input and takes the leading
+		// components -- a material attribute, a function's input, a node's pin, a variable. Decompiled graphs lean on that
+		// (a texture's RGB into Metallic), so a `.dss` gets the same narrowing, with a warning that says where the swizzle
+		// would go. Operators and the halves of '?:' stay strict: the graph refuses mismatched widths there too.
+		if (Conversion == IR::EIRConversion::None && !IsLegacyScope()
+			&& (Site == EConversionSite::Assignment || Site == EConversionSite::Pin || (Site == EConversionSite::Operand && bConvertingCallArgument))
+			&& From.IsNumeric() && To.IsNumeric() && From.Cols == 1 && To.Cols == 1 && From.Rows > To.Rows && To.Rows >= 1)
+		{
+			Diagnostics.Warning(
+				TEXT("DSH5289"),
+				CurrentFile,
+				Operand.Span,
+				FText::Format(
+					LOCTEXT("GraphTruncation", "{0} expects {1}, and this is {2}: its leading components are taken, as the engine's graph does; write the swizzle to say so."),
+					What,
+					DescribeType(To),
+					DescribeType(From)));
+			if (FBoundExpr* OperandBinding = Bound.Expressions.Find(&Operand))
+			{
+				OperandBinding->LegacyTruncateWidth = To.Rows;
+			}
+			Conversion = Site == EConversionSite::Pin ? IR::EIRConversion::Identity : IR::EIRConversion::Truncate;
+		}
+
 		if (Conversion == IR::EIRConversion::None)
 		{
 			// One sentence, five codes. The message is written out at each of the five raise sites
@@ -3860,6 +3884,7 @@ namespace UE::DreamShader::Lang::Private
 
 			if (Param.Direction == EParamDirection::In)
 			{
+				TGuardValue<bool> ArgumentGuard(bConvertingCallArgument, true);
 				Argument.Conversion = Convert(
 					*Value,
 					Param.Type,

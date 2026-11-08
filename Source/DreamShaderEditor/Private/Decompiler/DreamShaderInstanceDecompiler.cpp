@@ -248,7 +248,16 @@ namespace UE::DreamShader::Editor::Private
 				Override.Kind = Kind;
 				InstanceDecompile::FillOverrideValue(Meta.Value, Override);
 
-				const int32 SchemaIndex = Schema.bValid ? Schema.Find(Override.ParameterName) : INDEX_NONE;
+				// EndlessAlice local hunk: a parent may have parameters of one name and several types; take this kind's.
+				int32 SchemaIndex = INDEX_NONE;
+				if (Schema.bValid)
+				{
+					SchemaIndex = Schema.Parameters.IndexOfByPredicate([&Override, Kind](const IR::FIRParameterSchemaEntry& Entry)
+					{
+						return Entry.Kind == Kind && Entry.Association == IR::EIRParameterAssociation::Global
+							&& Entry.Name.Equals(Override.ParameterName, ESearchCase::CaseSensitive);
+					});
+				}
 				if (SchemaIndex != INDEX_NONE && Schema.Parameters[SchemaIndex].Kind == Kind)
 				{
 					const IR::FIRParameterSchemaEntry& Entry = Schema.Parameters[SchemaIndex];

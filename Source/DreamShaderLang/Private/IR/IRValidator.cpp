@@ -1426,8 +1426,11 @@ namespace UE::DreamShader::IR
 				for (int32 Earlier = 0; Earlier < Index; ++Earlier)
 				{
 					const FIRInstanceOverride& Other = Instance.Overrides[Earlier];
+					// EndlessAlice local hunk: the engine keys a parameter by name and type, so two overrides of one name and
+					// different kinds set two parameters.
 					if (Other.Association == Override.Association
 						&& Other.AssociationIndex == Override.AssociationIndex
+						&& Other.Kind == Override.Kind
 						&& Other.ParameterName.Equals(Override.ParameterName, ESearchCase::CaseSensitive))
 					{
 						Context.bValid &= Context.Sink.Error(
@@ -1443,8 +1446,43 @@ namespace UE::DreamShader::IR
 
 				if (Instance.ParentSchema.bValid)
 				{
-					const int32 EntryIndex = Instance.ParentSchema.Find(Override.ParameterName, Override.Association, Override.AssociationIndex);
-					if (EntryIndex == INDEX_NONE || Instance.ParentSchema.Parameters[EntryIndex].bPruned)
+					int32 EntryIndex = Instance.ParentSchema.Find(Override.ParameterName, Override.Association, Override.AssociationIndex);
+					// EndlessAlice local hunk: of the same-named entries, the one of this override's kind.
+					for (int32 Candidate = 0; EntryIndex != INDEX_NONE && Candidate < Instance.ParentSchema.Parameters.Num(); ++Candidate)
+					{
+						const FIRParameterSchemaEntry& Entry = Instance.ParentSchema.Parameters[Candidate];
+						if (Entry.Kind == Override.Kind && Entry.Association == Override.Association
+							&& Entry.AssociationIndex == Override.AssociationIndex && !Entry.bPruned
+							&& Entry.Name.Equals(Override.ParameterName, ESearchCase::CaseSensitive))
+						{
+							EntryIndex = Candidate;
+							break;
+						}
+					}
+					// EndlessAlice local hunk: an instance that switches statics compiles its own permutation, which can
+					// have parameters the parent's default one lacks (the binder's DSH7258 says the same); keep it.
+					bool bSwitchesStatics = false;
+					for (const FIRInstanceOverride& Other : Instance.Overrides)
+					{
+						bSwitchesStatics |= Other.Kind == EIRParameterKind::StaticSwitch || Other.Kind == EIRParameterKind::StaticComponentMask;
+					}
+					bSwitchesStatics |= Instance.ParentSchema.Origin.Equals(TEXT("asset"), ESearchCase::CaseSensitive);
+					if (bSwitchesStatics && EntryIndex != INDEX_NONE && Instance.ParentSchema.Parameters[EntryIndex].Kind != Override.Kind)
+					{
+						// Only an entry of another kind has this name: for the permutation the instance makes, the same as none.
+						EntryIndex = INDEX_NONE;
+					}
+					if ((EntryIndex == INDEX_NONE || Instance.ParentSchema.Parameters[EntryIndex].bPruned) && bSwitchesStatics)
+					{
+						Context.Sink.Warning(
+							TEXT("DSH4333"),
+							Override.Source.Span,
+							FText::Format(
+								LOCTEXT("InstanceNotInDefaultSchema", "Override '{0}' of product {1} names a parameter the parent's default permutation does not have; the instance switches statics, so it is kept."),
+								FText::FromString(Override.ParameterName),
+								DescribeProductRef(ProductIndex, Product)));
+					}
+					else if (EntryIndex == INDEX_NONE || Instance.ParentSchema.Parameters[EntryIndex].bPruned)
 					{
 						Context.bValid &= Context.Sink.Error(
 							TEXT("DSH4333"),

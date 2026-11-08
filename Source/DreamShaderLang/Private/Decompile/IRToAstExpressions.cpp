@@ -957,6 +957,57 @@ namespace UE::DreamShader::Lang::DecompileAst
 		return FailValue(NodeIndex, LOCTEXT("TakeStatement", "it is a statement and has no value"));
 	}
 
+	FExprPtr FGraphWriter::TakeValueFitted(const FIRValue& Value, const FIRType& To)
+	{
+		FExprPtr Expr = TakeValue(Value);
+		if (!Expr || !Graph.IsValidValue(Value) || Value.Output < 0)
+		{
+			return Expr;
+		}
+		const FIRNode& Node = Graph.Nodes[Value.Node];
+		if (!Node.Outputs.IsValidIndex(Value.Output))
+		{
+			return Expr;
+		}
+		const FIRType& From = Node.Outputs[Value.Output];
+		// EndlessAlice local hunk: the engine connects a wider vector to a narrower pin and takes its leading
+		// components; a `.dss` says so with the swizzle (the binder's DSH4228 / DSH4226 otherwise).
+		if (From.IsNumeric() && To.IsNumeric() && From.Cols == 1 && To.Cols == 1 && From.Rows > To.Rows && To.Rows >= 1 && From.Rows <= 4)
+		{
+			return MakeMemberExpr(ParenthesizeIfCompound(MoveTemp(Expr)), FString(TEXT("rgba")).Left(To.Rows));
+		}
+		return Expr;
+	}
+
+	void FGraphWriter::TakeBranchesMatched(const FIRValue& A, const FIRValue& B, FExprPtr& OutA, FExprPtr& OutB)
+	{
+		OutA = TakeValue(A);
+		OutB = TakeValue(B);
+		const auto WidthOf = [this](const FIRValue& Value) -> int32
+		{
+			return Graph.IsValidValue(Value) ? Graph.TypeOf(Value).GraphComponentCount() : 0;
+		};
+		const int32 WidthA = WidthOf(A);
+		const int32 WidthB = WidthOf(B);
+		const auto Pad = [](FExprPtr Expr, const int32 From, const int32 To) -> FExprPtr
+		{
+			// A scalar broadcasts by itself; a vector narrower than the other branch is padded with zeros.
+			if (!Expr || From <= 1 || To <= From || To > 4)
+			{
+				return Expr;
+			}
+			TArray<FExprPtr> Parts;
+			Parts.Add(MoveTemp(Expr));
+			for (int32 Index = From; Index < To; ++Index)
+			{
+				Parts.Add(MakeNumberExpr(0.0));
+			}
+			return MakeConstructorExpr(MakeValueTypeRef(FIRType::Float(To), /* bKeepBool */ false), MoveTemp(Parts));
+		};
+		OutA = Pad(MoveTemp(OutA), WidthA, WidthB);
+		OutB = Pad(MoveTemp(OutB), WidthB, WidthA);
+	}
+
 	FExprPtr FGraphWriter::BuildConstant(const FIRNode& Node) const
 	{
 		const FIRProperty* Value = Node.FindProperty(IR::Prop::Value);
@@ -1359,8 +1410,9 @@ namespace UE::DreamShader::Lang::DecompileAst
 		case EIROp::Select:
 		{
 			FExprPtr Condition = BuildCondition(Node.Operands[0]);
-			FExprPtr IfTrue = TakeValue(Node.Operands[1]);
-			FExprPtr IfFalse = TakeValue(Node.Operands[2]);
+			FExprPtr IfTrue;
+			FExprPtr IfFalse;
+			TakeBranchesMatched(Node.Operands[1], Node.Operands[2], IfTrue, IfFalse);
 			return MakeConditionalExpr(MoveTemp(Condition), MoveTemp(IfTrue), MoveTemp(IfFalse));
 		}
 
@@ -1411,8 +1463,9 @@ namespace UE::DreamShader::Lang::DecompileAst
 
 			FExprPtr Left = TakeValue(A);
 			FExprPtr Right = TakeValue(B);
-			FExprPtr TrueExpr = TakeValue(*IfTrue);
-			FExprPtr FalseExpr = TakeValue(*IfFalse);
+			FExprPtr TrueExpr;
+			FExprPtr FalseExpr;
+			TakeBranchesMatched(*IfTrue, *IfFalse, TrueExpr, FalseExpr);
 			return MakeConditionalExpr(MakeBinaryExpr(Operator, MoveTemp(Left), MoveTemp(Right)), MoveTemp(TrueExpr), MoveTemp(FalseExpr));
 		}
 
@@ -1431,8 +1484,9 @@ namespace UE::DreamShader::Lang::DecompileAst
 			}
 
 			FExprPtr Condition = TakeValue(Node.Operands[0]);
-			FExprPtr IfTrue = TakeValue(Node.Operands[1]);
-			FExprPtr IfFalse = TakeValue(Node.Operands[2]);
+			FExprPtr IfTrue;
+			FExprPtr IfFalse;
+			TakeBranchesMatched(Node.Operands[1], Node.Operands[2], IfTrue, IfFalse);
 			return MakeConditionalExpr(MoveTemp(Condition), MoveTemp(IfTrue), MoveTemp(IfFalse));
 		}
 
@@ -1493,7 +1547,7 @@ namespace UE::DreamShader::Lang::DecompileAst
 				const FIRInput* Input = Node.FindInput(Param.PinName);
 				if (Input && Input->Value.IsValid())
 				{
-					Argument = TakeValue(Input->Value);
+					Argument = TakeValueFitted(Input->Value, Param.Type);
 				}
 				else if (Param.bOptional || Param.bHasDefault)
 				{

@@ -554,6 +554,16 @@ namespace UE::DreamShader::Lang::DecompileAst
 
 		/** The expression a reader writes for Value; records what it depends on in CurrentDependencies. */
 		FExprPtr TakeValue(const FIRValue& Value);
+		/**
+		 * EndlessAlice local hunk: TakeValue for a place that wants To. A wider vector wired into a narrower place is
+		 * legal in the engine's graph (it takes the leading components), and 2.0 asks for the swizzle, so write it.
+		 */
+		FExprPtr TakeValueFitted(const FIRValue& Value, const FIRType& To);
+		/**
+		 * EndlessAlice local hunk: the two branches of a select / switch, padded with zeros to the wider one's width.
+		 * The engine compiles only the branch it takes, so its graph lets them differ; 2.0 makes one value of them.
+		 */
+		void TakeBranchesMatched(const FIRValue& A, const FIRValue& B, FExprPtr& OutA, FExprPtr& OutB);
 		FExprPtr TakeZero(const FIRType& Type);
 		/** DSH9078, and the `0.0` that stands in. */
 		FExprPtr FailValue(int32 NodeIndex, const FText& Why);

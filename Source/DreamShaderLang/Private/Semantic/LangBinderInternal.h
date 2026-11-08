@@ -392,6 +392,8 @@ namespace UE::DreamShader::Lang::Private
 		 * quietly become that colour's red channel and render.
 		 */
 		bool bConvertingIntoMaterialOutput = false;
+		/** EndlessAlice local hunk: set while a call argument is converted to its parameter's type. */
+		bool bConvertingCallArgument = false;
 
 		/** L19: the one local, parameter or global whose name matches Expr's ignoring case; fills the binding and warns DSH5275. */
 		bool TryBindLegacyIdentifierIgnoringCase(const FIdentifierExpr& Expr, FBoundExpr& OutBinding);

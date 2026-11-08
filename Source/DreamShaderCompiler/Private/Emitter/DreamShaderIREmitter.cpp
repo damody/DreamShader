@@ -1112,13 +1112,31 @@ namespace UE::DreamShader::Editor::Compiler
 				TArray<FString> Missing;
 				for (const IR::FIRInstanceOverride& Override : InstanceData.Overrides)
 				{
-					const int32 EntryIndex = AssetSchema.Find(Override.ParameterName, Override.Association, Override.AssociationIndex);
-					if (EntryIndex == INDEX_NONE || AssetSchema.Parameters[EntryIndex].Kind != Override.Kind)
+					// EndlessAlice local hunk: of the same-named parameters, the one of this override's kind.
+					const bool bFound = AssetSchema.Parameters.ContainsByPredicate([&Override](const IR::FIRParameterSchemaEntry& Entry)
+					{
+						return Entry.Kind == Override.Kind && Entry.Association == Override.Association
+							&& Entry.AssociationIndex == Override.AssociationIndex
+							&& Entry.Name.Equals(Override.ParameterName, ESearchCase::CaseSensitive);
+					});
+					if (!bFound)
 					{
 						Missing.Add(Override.ParameterName);
 					}
 				}
-				if (Missing.Num() > 0)
+				// EndlessAlice local hunk: drift is a DreamShader parent asset lagging its source. A parent no DreamShader
+				// source builds (an original asset) has no source to lag: an override it does not list is one the engine
+				// keeps for a static permutation, or ignores as stale, so it is applied and reported, not refused.
+				const bool bParentFromDreamShaderSource = Parent->GetPathName().Contains(TEXT("/Decompiled/"))
+					|| Cast<UDreamShaderMaterialInstance>(Parent) != nullptr;
+				if (Missing.Num() > 0 && !bParentFromDreamShaderSource)
+				{
+					Diagnostics.Warning(TEXT("DSH8246"), SpanOf(Product.Source), FText::Format(
+						LOCTEXT("InstanceParentLacksOverride", "The parent asset '{0}' has no parameter {1} of the kind this instance overrides in its default permutation; the override is applied as the engine keeps it."),
+						FText::FromString(Parent->GetPathName()),
+						FText::FromString(FString::Join(Missing, TEXT(", ")))));
+				}
+				else if (Missing.Num() > 0)
 				{
 					Diagnostics.Error(TEXT("DSH8246"), SpanOf(Product.Source), FText::Format(
 						LOCTEXT("InstanceParentDrift", "The parent asset '{0}' has no parameter {1} of the kind this instance overrides; the asset is older than its source. Compile the parent source first."),

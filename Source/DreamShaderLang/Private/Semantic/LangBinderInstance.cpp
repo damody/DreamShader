@@ -810,7 +810,27 @@ namespace UE::DreamShader::Lang::Private
 			const FBoundGlobal& Global = Bound.Globals[Override.GlobalIndex];
 			const FLangSpan Span = Global.Decl ? Global.Decl->Declarator.NameSpan : FLangSpan();
 
-			const int32 EntryIndex = Schema->Find(Override.ParameterName, IR::EIRParameterAssociation::Global, INDEX_NONE);
+			int32 EntryIndex = Schema->Find(Override.ParameterName, IR::EIRParameterAssociation::Global, INDEX_NONE);
+			// EndlessAlice local hunk: the engine keys a parameter by its name and its type, so a parent may have a
+			// texture 'Normal' and a vector 'Normal' at once. Prefer the same-named entry this override's type fits and
+			// that no other override took; only when none does is the first one kept, for the diagnostics below.
+			if (EntryIndex != INDEX_NONE)
+			{
+				for (int32 Candidate = 0; Candidate < Schema->Parameters.Num(); ++Candidate)
+				{
+					const IR::FIRParameterSchemaEntry& CandidateEntry = Schema->Parameters[Candidate];
+					if (CandidateEntry.Association == IR::EIRParameterAssociation::Global
+						&& !CandidateEntry.bPruned
+						&& CandidateEntry.Name.Equals(Override.ParameterName, ESearchCase::CaseSensitive)
+						&& OverrideOfEntry[Candidate] == INDEX_NONE
+						&& IsStaticParameterKind(CandidateEntry.Kind) == Global.Directives.bStatic
+						&& IsInstanceOverrideCompatible(Global.Type, Override.Kind, CandidateEntry))
+					{
+						EntryIndex = Candidate;
+						break;
+					}
+				}
+			}
 			if (EntryIndex == INDEX_NONE)
 			{
 				bool bLayerOnly = false;
@@ -853,6 +873,33 @@ namespace UE::DreamShader::Lang::Private
 					continue;
 				}
 
+				// EndlessAlice local hunk: an instance that switches a static parameter compiles its own permutation of the
+				// parent, and that permutation can have parameters the parent's default one does not (a branch the switch
+				// turns on). The schema is the default permutation's, so under a static override this is a warning, and
+				// the override is kept: the engine applies it where the parameter exists and ignores it where it does not.
+				bool bInstanceSwitchesStatics = false;
+				for (const FBoundInstanceOverride& Other : Bound.Instance.Overrides)
+				{
+					if (Bound.Globals.IsValidIndex(Other.GlobalIndex) && Bound.Globals[Other.GlobalIndex].Directives.bStatic)
+					{
+						bInstanceSwitchesStatics = true;
+						break;
+					}
+				}
+				// An original asset as the parent (an asset-built schema): the engine keeps an override its default
+				// permutation does not list, so the decompiled instance's stale ones are no error either.
+				if (bInstanceSwitchesStatics || Schema->Origin.Equals(TEXT("asset"), ESearchCase::CaseSensitive))
+				{
+					Diagnostics.Warning(
+						TEXT("DSH7258"),
+						CurrentFile,
+						Span,
+						FText::Format(
+							LOCTEXT("InstanceUnknownParameterUnderStatics", "'{0}' is not a parameter of the parent '{1}' as it compiles by default; this instance switches static parameters, so it is kept for the permutation they make."),
+							FText::FromString(Override.ParameterName),
+							FText::FromString(ParentLabel)));
+					continue;
+				}
 				Diagnostics.Error(
 					TEXT("DSH7258"),
 					CurrentFile,
@@ -923,6 +970,21 @@ namespace UE::DreamShader::Lang::Private
 				continue;
 			}
 
+			if (!IsInstanceOverrideCompatible(Global.Type, Override.Kind, Entry) && Schema->Origin.Equals(TEXT("asset"), ESearchCase::CaseSensitive))
+			{
+				// EndlessAlice local hunk: an original parent has a '{0}' of another type only; the engine keeps this
+				// override of the type the instance gave it (a static permutation's, or a stale one), and so does this.
+				Diagnostics.Warning(
+					TEXT("DSH7259"),
+					CurrentFile,
+					Global.Decl ? Global.Decl->Type.Span : Span,
+					FText::Format(
+						LOCTEXT("InstanceTypeMismatchKept", "'{0}' is a {1} parameter in the parent's default permutation, and this override is of another type; it is kept as the engine keeps it."),
+						FText::FromString(Override.ParameterName),
+						FText::FromString(IR::LexToString(Entry.Kind))));
+				OverrideOfEntry[EntryIndex] = INDEX_NONE;
+				continue;
+			}
 			if (!IsInstanceOverrideCompatible(Global.Type, Override.Kind, Entry))
 			{
 				const FString Written = Global.Decl ? Global.Decl->Type.Name : Global.Type.ToString();

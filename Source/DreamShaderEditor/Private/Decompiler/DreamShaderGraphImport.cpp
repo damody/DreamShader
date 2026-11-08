@@ -50,6 +50,8 @@
 #include "Materials/MaterialExpressionComment.h"
 #include "Materials/MaterialExpressionComponentMask.h"
 #include "Materials/MaterialExpressionConstant.h"
+#include "Materials/MaterialExpressionTextureObject.h"
+#include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Materials/MaterialExpressionConstant2Vector.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
 #include "Materials/MaterialExpressionConstant4Vector.h"
@@ -1438,7 +1440,29 @@ namespace UE::DreamShader::Editor::Private
 			for (const FFunctionExpressionInput& Input : Call->FunctionInputs)
 			{
 				const FName PinName = Input.ExpressionInput ? Input.ExpressionInput->InputName : Input.Input.InputName;
-				const FIRValue Value = ResolveInput(Input.Input);
+				FIRValue Value = ResolveInput(Input.Input);
+
+				// EndlessAlice local hunk: an unconnected input whose callee uses its Preview as the default gets what the
+				// Preview is wired to, when that is a node the call site can hold by itself (a texture object, a constant,
+				// a texture coordinate): the engine compiles that preview in the caller's place, and the source cannot say
+				// such a default in the callee (DSH9071), so without this the call misses an argument it needs (DSH4217).
+				const UMaterialExpressionFunctionInput* CalleeInput = Input.ExpressionInput.Get();
+				if (!Value.IsValid() && CalleeInput && CalleeInput->bUsePreviewValueAsDefault && CalleeInput->Preview.Expression)
+				{
+					const UMaterialExpression* Preview = CalleeInput->Preview.Expression;
+					const bool bStandsAlone = Preview->GetClass() == UMaterialExpressionTextureObject::StaticClass()
+						|| Preview->IsA<UMaterialExpressionConstant>() || Preview->IsA<UMaterialExpressionConstant2Vector>()
+						|| Preview->IsA<UMaterialExpressionConstant3Vector>() || Preview->IsA<UMaterialExpressionConstant4Vector>()
+						|| Preview->GetClass() == UMaterialExpressionTextureCoordinate::StaticClass()
+						|| Preview->GetClass() == UMaterialExpressionStaticBool::StaticClass();
+					if (bStandsAlone)
+					{
+						// Not one of this graph's expressions, so nothing has imported it yet.
+						EnsureImported(CalleeInput->Preview.Expression);
+						Value = ResolveInput(CalleeInput->Preview);
+					}
+				}
+
 				if (Value.IsValid() && !PinName.IsNone())
 				{
 					Node.Inputs.Add({ PinName.ToString(), Value });

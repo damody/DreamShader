@@ -352,6 +352,14 @@ namespace UE::DreamShader::IR
 			return EIRConversion::Identity;
 		}
 
+		// EndlessAlice local hunk: the other way round too. A texture whose kind the source does not say (a reflected
+		// `UE.TextureObject(...)`, whose output the catalog can only call "a texture") reaches a typed texture input the
+		// way the graph wires it: the engine checks the texture it actually holds when it compiles the material.
+		if (From.IsTexture() && To.IsTexture() && From.Texture == Lang::ETextureKind::None)
+		{
+			return EIRConversion::Identity;
+		}
+
 		if (!From.IsNumeric() || !To.IsNumeric())
 		{
 			// Textures of different kinds, samplers, material, Substrate, structs and void: only

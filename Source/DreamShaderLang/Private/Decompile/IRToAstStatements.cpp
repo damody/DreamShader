@@ -324,7 +324,13 @@ namespace UE::DreamShader::Lang::DecompileAst
 			}
 
 			CurrentDependencies.Reset();
-			FExprPtr Value = TakeValue(Input.Value);
+			// EndlessAlice local hunk: an attribute pin takes the leading components of a wider value; write the swizzle.
+			const IR::FCatalogMaterialAttribute* Attribute = Owner.GetCatalog().MaterialAttributes.FindByPredicate(
+				[&Input](const IR::FCatalogMaterialAttribute& Candidate)
+				{
+					return Candidate.Name.Equals(Input.Pin, ESearchCase::CaseSensitive) || Candidate.Aliases.Contains(Input.Pin);
+				});
+			FExprPtr Value = Attribute ? TakeValueFitted(Input.Value, Attribute->ValueType) : TakeValue(Input.Value);
 			AddRootStatement(
 				MakeAssignStmt(MakeMemberExpr(MakeIdentifierExpr(Root.Target), Input.Pin), MoveTemp(Value)),
 				RegionOfWrite(Input.Value),
