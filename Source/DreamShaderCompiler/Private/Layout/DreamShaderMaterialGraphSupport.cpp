@@ -20,6 +20,7 @@
 #include "Materials/MaterialExpressionConstant2Vector.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
 #include "Materials/MaterialExpressionConstant4Vector.h"
+#include "Materials/MaterialExpressionDynamicParameter.h"
 #include "Materials/MaterialExpressionObjectPositionWS.h"
 #include "Materials/MaterialExpressionNamedReroute.h"
 #include "Materials/MaterialExpressionPanner.h"
@@ -67,6 +68,23 @@ namespace UE::DreamShader::Editor::Private
 		const int32 PositionX,
 		const int32 PositionY)
 	{
+		// CreateMaterialExpressionEx calls UpdateDynamicParameterProperties on a DynamicParameter, which checks for an
+		// owning material and asserts inside a material function. Build that one node the same way minus that call:
+		// the names it would copy come from other nodes, and the generator sets the node's own ParamNames anyway.
+		if (!Material && MaterialFunction && ExpressionClass && ExpressionClass->IsChildOf(UMaterialExpressionDynamicParameter::StaticClass()))
+		{
+			UMaterialExpression* NewExpression = NewObject<UMaterialExpression>(MaterialFunction, ExpressionClass, NAME_None, RF_Transactional);
+			MaterialFunction->GetExpressionCollection().AddExpression(NewExpression);
+			NewExpression->MaterialExpressionEditorX = PositionX;
+			NewExpression->MaterialExpressionEditorY = PositionY;
+			NewExpression->UpdateMaterialExpressionGuid(true, false);
+			NewExpression->UpdateParameterGuid(true, false);
+			if (NewExpression->HasAParameterName())
+			{
+				NewExpression->ValidateParameterName(false);
+			}
+			return NewExpression;
+		}
 		return UMaterialEditingLibrary::CreateMaterialExpressionEx(Material, MaterialFunction, ExpressionClass, nullptr, PositionX, PositionY, false);
 	}
 
