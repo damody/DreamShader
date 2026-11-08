@@ -23,6 +23,8 @@
 #else
 #include "MaterialTypes.h"
 #endif
+#include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "Misc/Paths.h"
 #include "UObject/Package.h"
 
@@ -138,6 +140,34 @@ namespace UE::DreamShader::Editor::Private
 				: ObjectPath;
 		}
 
+		/** EndlessAlice local hunk: true when no other material or material instance asset in the project shares the name. */
+		static bool IsMaterialNameUniqueInProject(FName Name)
+		{
+			static TMap<FName, int32> Counts;
+			static bool bCounted = false;
+			if (!bCounted)
+			{
+				IAssetRegistry* Registry = IAssetRegistry::Get();
+				if (Registry == nullptr)
+				{
+					return false;
+				}
+				bCounted = true;
+				Registry->WaitForCompletion();
+				FARFilter Filter;
+				Filter.ClassPaths.Add(UMaterialInterface::StaticClass()->GetClassPathName());
+				Filter.bRecursiveClasses = true;
+				TArray<FAssetData> Assets;
+				Registry->GetAssets(Filter, Assets);
+				for (const FAssetData& Asset : Assets)
+				{
+					++Counts.FindOrAdd(Asset.AssetName);
+				}
+			}
+			const int32* Count = Counts.Find(Name);
+			return Count != nullptr && *Count == 1;
+		}
+
 		/** The parent's bare name, when the products under the target's own source root have exactly one of that name and it is this one. */
 		static bool TryMakeBareParentName(const UMaterialInterface* Parent, const FString& TargetSourceFilePath, FString& OutName)
 		{
@@ -152,6 +182,13 @@ namespace UE::DreamShader::Editor::Private
 			TArray<const ::UE::DreamShader::Editor::Compiler::FDreamShaderProductRecord*> Records;
 			Index.FindByName(Root->Directory, Parent->GetName(), Records);
 			if (Records.Num() != 1 || !Records[0]->ObjectPath.Equals(Parent->GetPathName(), ESearchCase::IgnoreCase))
+			{
+				return false;
+			}
+			// EndlessAlice local hunk: the products built so far are not all there will be. A batch decompile turns
+			// the other materials of that name into sources too, and the bare name then names more than one product
+			// (DSH8262), so it is written only when the name is unique among every material asset in the project.
+			if (!IsMaterialNameUniqueInProject(Parent->GetFName()))
 			{
 				return false;
 			}
